@@ -1,0 +1,68 @@
+{
+  "T. Nagar": {
+    "Gopathi Narayanaswami Road": {
+      "lat": 13.04,
+      "lon": 80.235,
+      "highway_type": "residential",
+      "aadt": 20000,
+      "road_width": 9.0,
+      "speed_limit": 30,
+      "land_use": "residential",
+      "parking_type": "rarely",
+      "num_exits": 3,
+      "num_side_roads": 8,
+      "fatal_crashes_hist": 1,
+      "injury_crashes_hist": 5,
+      "property_crashes_hist": 12
+    },
+    "North Usman Road": {
+      "lat": 13.0425,
+      "lon": 80.232,
+      "highway_type": "secondary",
+      "aadt": 28000,
+      "road_width": 11.0,
+      "speed_limit": 40,
+      "land_use": "shops",
+      "parking_type": "bays_at_kerb",
+      "num_exits": 10,
+      "num_side_roads": 15,
+      "fatal_crashes_hist": 2,
+      "injury_crashes_hist": 10,
+      "property_crashes_hist": 22
+    }
+  },
+  "Anna Nagar": {
+    "2nd Avenue": {
+      "lat": 13.085,
+      "lon": 80.2101,
+      "highway_type": "secondary",
+      "aadt": 28000,
+      "road_width": 11.0,
+      "speed_limit": 40,
+      "land_use": "apartments",
+      "parking_type": "bays_at_kerb",
+      "num_exits": 10,
+      "num_side_roads": 15,
+      "fatal_crashes_hist": 2,
+      "injury_crashes_hist": 10,
+      "property_crashes_hist": 22
+    }
+  },
+  "Velachery": {
+    "Velachery Main Road": {
+      "lat": 12.9816,
+      "lon": 80.2209,
+      "highway_type": "secondary",
+      "aadt": 30000,
+      "road_width": 12.0,
+      "speed_limit": 40,
+      "land_use": "apartments",
+      "parking_type": "prohibited",
+      "num_exits": 15,
+      "num_side_roads": 10,
+      "fatal_crashes_hist": 3,
+      "injury_crashes_hist": 20,
+      "property_crashes_hist": 30
+    }
+  }
+}

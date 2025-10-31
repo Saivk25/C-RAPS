@@ -1,0 +1,10 @@
+# .gitignore
+__pycache__/
+*.pyc
+temp_*.mp4
+temp_chart.png
+*.mp3
+.env
+secrets.toml
+*.DS_Store
+*.log
