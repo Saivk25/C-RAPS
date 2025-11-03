@@ -28,8 +28,70 @@ from vehicle_detection import load_yolo_model, detect_vehicles
 from water_detection import load_water_yolo_model, detect_water, apply_water_overlay, get_water_level_category
 from collections import Counter
 import google.generativeai as genai
-warnings.filterwarnings('ignore')
+# --- ADD TO main.py (TOP) ---
+from PIL import Image
+import io
 
+def safe_load_image(uploaded_file):
+    """Fix Streamlit image corruption → force RGB"""
+    try:
+        img = Image.open(io.BytesIO(uploaded_file.getvalue()))
+        if img.mode != 'RGB':
+            img = img.convert('RGB')
+        return img
+    except Exception as e:
+        st.error(f"Image error: {e}")
+        return None
+warnings.filterwarnings('ignore')
+from community_system import (
+    save_video_analysis, 
+    fetch_cached_analysis, 
+    display_cached_analysis_ui
+)
+
+from location_services import (
+    search_places_in_chennai,
+    reverse_geocode,
+    validate_chennai_coordinates
+)
+
+from ai_services import (
+    get_citizen_recommendations,
+    get_official_recommendations,
+    parse_natural_language_query
+)
+
+from risk_calculator import (
+    build_enhanced_fuzzy_system,
+    calculate_enhanced_risk,
+    calculate_epdo,
+    predict_accidents
+)
+# Add this AFTER your other imports (around line 30)
+from smart_road_extractor import (
+    SmartRoadDataExtractor,
+    create_enhanced_comparison_ui
+)
+# Add this NEW cached function
+@st.cache_resource
+def load_smart_extractor():
+    """Load AI road data extractor (cached for performance)"""
+    try:
+        # Try environment variable first
+        api_key = os.getenv('GEMINI_API_KEY')
+        
+        # Fall back to streamlit secrets
+        if not api_key:
+            api_key = st.secrets.get('GEMINI_API_KEY')
+        
+        if not api_key:
+            return None
+        
+        extractor = SmartRoadDataExtractor(api_key)
+        return extractor
+    except Exception as e:
+        st.sidebar.error(f"AI Extractor error: {e}")
+        return None
 # Initialize session state
 if 'analyze' not in st.session_state:
     st.session_state['analyze'] = False
@@ -64,90 +126,7 @@ def load_street_knowledge_base():
 
 STREET_KNOWLEDGE_BASE = load_street_knowledge_base()
 @st.cache_resource
-def build_enhanced_fuzzy_system():
-    """Build enhanced fuzzy logic system with corrected priority rules."""
-    # ... (keep all your existing Antecedent/Consequent definitions) ...
-    
-    vehicle_density = ctrl.Antecedent(np.arange(0, 101, 1), 'vehicle_density')
-    aadt = ctrl.Antecedent(np.arange(0, 50001, 100), 'aadt')
-    road_width = ctrl.Antecedent(np.arange(2, 21, 0.1), 'road_width')
-    water_coverage = ctrl.Antecedent(np.arange(0, 101, 1), 'water_coverage')
-    speed_limit = ctrl.Antecedent(np.arange(20, 101, 1), 'speed_limit')
-    rain_intensity = ctrl.Antecedent(np.arange(0, 51, 1), 'rain_intensity')
-    risk = ctrl.Consequent(np.arange(0, 101, 1), 'risk')
 
-    # ... (keep all your membership function definitions) ...
-    
-    vehicle_density['very_low'] = fuzz.trimf(vehicle_density.universe, [0, 0, 15])
-    vehicle_density['low'] = fuzz.trimf(vehicle_density.universe, [10, 20, 35])
-    vehicle_density['medium'] = fuzz.trimf(vehicle_density.universe, [30, 45, 60])
-    vehicle_density['high'] = fuzz.trimf(vehicle_density.universe, [55, 70, 85])
-    vehicle_density['very_high'] = fuzz.trimf(vehicle_density.universe, [80, 100, 100])
-
-    aadt['low'] = fuzz.trimf(aadt.universe, [0, 5000, 15000])
-    aadt['medium'] = fuzz.trimf(aadt.universe, [10000, 20000, 30000])
-    aadt['high'] = fuzz.trimf(aadt.universe, [25000, 35000, 50000])
-
-    road_width['narrow'] = fuzz.trimf(road_width.universe, [2, 4, 6])
-    road_width['medium'] = fuzz.trimf(road_width.universe, [5, 7, 9])
-    road_width['wide'] = fuzz.trimf(road_width.universe, [8, 12, 20])
-
-    water_coverage['none'] = fuzz.trimf(water_coverage.universe, [0, 0, 2])
-    water_coverage['light'] = fuzz.trimf(water_coverage.universe, [1, 5, 12])
-    water_coverage['moderate'] = fuzz.trimf(water_coverage.universe, [10, 25, 40])
-    water_coverage['heavy'] = fuzz.trimf(water_coverage.universe, [35, 60, 100])
-
-    speed_limit['low'] = fuzz.trimf(speed_limit.universe, [20, 30, 45])
-    speed_limit['medium'] = fuzz.trimf(speed_limit.universe, [40, 55, 70])
-    speed_limit['high'] = fuzz.trimf(speed_limit.universe, [65, 80, 100])
-
-    rain_intensity['none'] = fuzz.trimf(rain_intensity.universe, [0, 0, 2])
-    rain_intensity['light'] = fuzz.trimf(rain_intensity.universe, [1, 5, 10])
-    rain_intensity['heavy'] = fuzz.trimf(rain_intensity.universe, [8, 25, 50])
-
-    risk['very_low'] = fuzz.trimf(risk.universe, [0, 10, 25])
-    risk['low'] = fuzz.trimf(risk.universe, [15, 30, 45])
-    risk['medium'] = fuzz.trimf(risk.universe, [35, 50, 65])
-    risk['high'] = fuzz.trimf(risk.universe, [55, 70, 85])
-    risk['very_high'] = fuzz.trimf(risk.universe, [75, 90, 100])
-
-    # ============================================================
-    # CORRECTED RULES WITH PRIORITY HIERARCHY
-    # ============================================================
-    rules = [
-        # --- PRIORITY 1: High-risk overrides (ALWAYS very high risk) ---
-        # Severe waterlogging is ALWAYS very high risk, regardless of traffic
-        ctrl.Rule(water_coverage['heavy'], risk['very_high']),
-        
-        # Heavy rain + any significant traffic is very high risk
-        ctrl.Rule(rain_intensity['heavy'] & (vehicle_density['medium'] | vehicle_density['high'] | vehicle_density['very_high']), risk['very_high']),
-        
-        # Very high density is ALWAYS very high risk
-        ctrl.Rule(vehicle_density['very_high'], risk['very_high']),
-        
-        # High speed + high density = very high risk
-        ctrl.Rule(speed_limit['high'] & vehicle_density['high'], risk['very_high']),
-
-        # --- PRIORITY 2: High-risk combinations ---
-        ctrl.Rule(water_coverage['moderate'], risk['high']),
-        ctrl.Rule(vehicle_density['high'], risk['high']),
-        ctrl.Rule(rain_intensity['heavy'], risk['high']),
-        ctrl.Rule(vehicle_density['medium'] & road_width['narrow'], risk['high']),
-        ctrl.Rule(vehicle_density['high'] & aadt['high'], risk['high']),
-        
-        # --- PRIORITY 3: Medium risk ---
-        ctrl.Rule(water_coverage['light'], risk['medium']),
-        ctrl.Rule(vehicle_density['medium'] & aadt['medium'], risk['medium']),
-        ctrl.Rule(aadt['high'] & vehicle_density['low'], risk['medium']),
-        ctrl.Rule(speed_limit['medium'] & vehicle_density['high'], risk['medium']),
-
-        # --- PRIORITY 4: Low risk (only when conditions are actually safe) ---
-        ctrl.Rule(vehicle_density['low'] & water_coverage['none'], risk['low']),
-        ctrl.Rule(water_coverage['none'] & vehicle_density['very_low'] & rain_intensity['none'], risk['very_low'])
-    ]
-
-    risk_ctrl = ctrl.ControlSystem(rules)
-    return ctrl.ControlSystemSimulation(risk_ctrl)
 # =============================================================================
 # LOCATION AND STREET DATA
 # =============================================================================
@@ -420,189 +399,6 @@ def _get_weather_description(weather_code):
     }
     return weather_codes.get(weather_code, 'Clear')
 
-# =============================================================================
-# RISK CALCULATION
-# =============================================================================
-
-def calculate_enhanced_risk(fuzzy_sim, vehicle_count, water_coverage_pct, street_data, rain_mm_hr):
-    """Calculate risk with improved traffic density calculation."""
-    try:
-        road_width_val = max(2.0, min(20.0, float(street_data.get('road_width', 7.0) or 7.0)))
-        aadt_val = max(0, min(50000, int(street_data.get('aadt', 15000) or 15000)))
-        speed_limit_val = max(20, min(100, int(street_data.get('speed_limit', 50) or 50)))
-        
-        lanes_estimate = max(2, road_width_val / 3.5)
-        VEHICLES_PER_LANE_VISIBLE = 8  
-        road_capacity = lanes_estimate * VEHICLES_PER_LANE_VISIBLE
-        normalized_density = min(100.0, (float(vehicle_count) / road_capacity) * 100.0)
-        
-        fuzzy_sim.input['vehicle_density'] = max(0, min(100, normalized_density))
-        fuzzy_sim.input['aadt'] = aadt_val
-        fuzzy_sim.input['road_width'] = road_width_val
-        fuzzy_sim.input['water_coverage'] = max(0, min(100, water_coverage_pct))
-        fuzzy_sim.input['speed_limit'] = speed_limit_val
-        fuzzy_sim.input['rain_intensity'] = max(0, min(50, rain_mm_hr))
-        
-        fuzzy_sim.compute()
-        risk_score = fuzzy_sim.output['risk']
-        
-        if np.isnan(risk_score) or risk_score < 0:
-            risk_score = 35.0
-        if vehicle_count > 30:
-            risk_score = max(risk_score, 45.0)
-        elif vehicle_count > 20:
-            risk_score = max(risk_score, 35.0)
-            
-        return max(0.0, min(100.0, risk_score))
-    except Exception as e:
-        st.error(f"Risk calculation error: {e}")
-        traffic_risk = min(60, vehicle_count * 1.2)
-        water_risk = min(30, water_coverage_pct * 0.6) if water_coverage_pct > 5 else 0
-        rain_risk = min(20, rain_mm_hr * 0.4)
-        return min(100, max(25, traffic_risk + water_risk + rain_risk))
-def calculate_epdo(fatal_crashes, injury_crashes, property_crashes):
-    """
-    Calculates Equivalent Property Damage Only (EPDO) score
-    from the MPTCRSI-ES base paper.
-    EPDO = (1 × PDC) + (5 × IC) + (10 × FC)
-    """
-    epdo_score = (property_crashes * 1) + (injury_crashes * 5) + (fatal_crashes * 10)
-    
-    # Categorize severity
-    if epdo_score >= 50:
-        category = "Critical - Immediate Action"
-    elif epdo_score >= 20:
-        category = "High Priority"
-    elif epdo_score >= 10:
-        category = "Medium Priority"
-    else:
-        category = "Low Priority"
-    
-    return epdo_score, category
-
-def predict_accidents(aadt, road_width, speed_limit, num_exits, 
-                     num_side_roads, parking_type, land_use):
-    """
-    Predicts future accidents using the multi-variable model
-    from the MPTCRSI-ES base paper.
-    E(μ) = a × AADT^p × β1 × β2 × β3 × β4 × β5 × β6
-    """
-    try:
-        # Model 2: Enhanced with road characteristics
-        a = 6.09e-4
-        p = 0.8
-        
-        # Speed limit coefficient
-        beta_speed = {30: 1.8, 40: 2.0, 50: 2.25, 60: 2.85, 70: 1.0}
-        β1 = beta_speed.get(speed_limit, 2.0)
-        
-        # Road width coefficient
-        if 5.0 <= road_width <= 7.5:
-            β2 = 0.83
-        elif 8.0 <= road_width <= 8.5:
-            β2 = 0.68
-        else:
-            β2 = 0.80
-        
-        # Number of exits (5-40 optimal, others = 1.0)
-        β3 = 1.0 if 5 <= num_exits <= 40 else 1.2
-        
-        # Side roads coefficient
-        if num_side_roads == 0:
-            β4 = 0.72
-        elif num_side_roads <= 5:
-            β4 = 0.75
-        elif num_side_roads <= 10:
-            β4 = 1.0
-        else:
-            β4 = 1.25
-        
-        # Parking coefficient
-        parking_coeffs = {
-            "prohibited": 1.19,
-            "rarely": 1.0,
-            "bays_at_kerb": 1.77
-        }
-        β5 = parking_coeffs.get(parking_type, 1.0)
-        
-        # Land use coefficient
-        land_use_coeffs = {
-            "shops": 2.44,
-            "apartments": 1.56,
-            "industrial": 1.58,
-            "residential": 1.58,
-            "scattered": 1.0
-        }
-        β6 = land_use_coeffs.get(land_use, 1.3)
-        
-        # Calculate enhanced prediction
-        enhanced_accidents = a * (aadt ** p) * β1 * β2 * β3 * β4 * β5 * β6
-        
-        return enhanced_accidents
-    
-    except Exception as e:
-        st.warning(f"Could not predict accidents: {e}")
-        return 0.0
-# =============================================================================
-# VIDEO PROCESSING
-# =============================================================================
-# In main.py
-# =============================================================================
-# AI RECOMMENDATION MODULE (PHASE 3)
-# =============================================================================
-
-# =============================================================================
-# 💡 AI-POWERED RECOMMENDATION MODULE (GEMINI)
-# =============================================================================
-
-def get_gemini_recommendations(live_data, historical_data, street_data):
-    """
-    Generates advanced, generative AI recommendations using the Gemini API.
-    """
-    try:
-        # 1. Configure the API key from st.secrets
-        api_key = st.secrets["GEMINI_API_KEY"]
-        genai.configure(api_key=api_key)
-        
-        # 2. Create the model
-        model = genai.GenerativeModel('gemini-2.5-pro')
-        
-        # 3. Build a detailed prompt
-        prompt = f"""
-        You are a senior traffic safety engineer and emergency dispatcher for the city of Chennai.
-        I will provide you with a full risk analysis for a specific street.
-        Your job is to provide a brief, expert recommendation in markdown format.
-
-        **SITUATION ANALYSIS:**
-        - **Street:** {street_data['name']}, a {street_data['highway_type']} road.
-        - **Historical Risk:** {historical_data['epdo_category']} (EPDO Score: {historical_data['epdo_score']})
-        - **Predicted Accidents:** {historical_data['predicted_accidents']:.2f} per year.
-        - **Historical Street Data:** AADT is {street_data['aadt']}, Road width is {street_data['road_width']}m.
-
-        **LIVE DATA (Current Conditions):**
-        - **Live Risk Score:** {live_data['risk_score']:.1f}/100
-        - **Live Water Coverage:** {live_data['water_coverage']:.1f}%
-        - **Live Traffic Density:** {live_data['avg_density']} vehicles/frame (average)
-
-        **YOUR TASK:**
-        Based *only* on the data above, please provide:
-        1.  **Immediate Threat Assessment:** A one-sentence summary of the main problem (e.g., "CRITICAL: Severe flooding detected" or "HIGH: Extreme traffic congestion" or "LOW: Conditions are safe").
-        2.  **Short-Term Actions (For Dispatch):** A 1-2 bullet point list of actions for immediate dispatch (e.g., "Divert all traffic," "Monitor for bottlenecks").
-        3.  **Long-Term Actions (For Planning):** A 1-2 bullet point list of long-term infrastructure improvements (e.g., "Schedule review of drainage systems," "Install speed cameras").
-        """
-        
-        # 4. Generate the content
-        response = model.generate_content(prompt)
-        return response.text
-
-    except Exception as e:
-        # Provide a more specific error if the key is missing
-        if "API key" in str(e):
-            st.error("Gemini API Error: API key not found. Please add it to your .streamlit/secrets.toml file.")
-            return "API Key Error. See log."
-        else:
-            st.error(f"Gemini API Error: {e}")
-            return "Failed to get a recommendation from Gemini. Check your network connection."
         # In main.py
 def process_video_stream(yolo_model, water_model, source, frame_limit, display_placeholder, progress_bar):
     """
@@ -864,6 +660,8 @@ def main():
     water_model = load_water_yolo_model()
     fuzzy_sim = build_enhanced_fuzzy_system()
     chennai_gdf = load_geojson_data()
+    smart_extractor = load_smart_extractor()  # ← ADD THIS
+
     
     # Header
     st.markdown(
@@ -882,7 +680,7 @@ def main():
         with col1:
             st.markdown("### Input Configuration")
             
-            with st.expander("Media Input", expanded=True):
+            with st.expander("Media Input", expanded=False):
                 input_type = st.selectbox(
                     "Input Type", 
                     ["Image", "Video", "Live Feed"],
@@ -905,37 +703,167 @@ def main():
                     frame_limit = st.slider("Max Frames", 50, 500, 150)
                     st.info("Live feed will use your webcam")
 
-            with st.expander("Location Selection", expanded=True):
+            with st.expander("📍 Location Selection", expanded=False):
+                location_method = st.radio(
+                    "How would you like to select location?",
+                    ["🔍 Search Address", "🗺️ Browse Popular Areas"],
+                    horizontal=True
+                )
+            
+            selected_street_data = None
+            selected_area = "Chennai"  # default fallback
+            
+            # ───── LOCATION SELECTION LOGIC ─────
+            if location_method == "🔍 Search Address":
+                st.markdown("**Search any street in Chennai:**")
+                search_query = st.text_input(
+                    "Type street, area, or landmark...",
+                    placeholder="Parrys Corner, Anna Salai, OMR, Pondy Bazaar",
+                    key="search_input"
+                )
+                
+                if search_query and len(search_query) >= 2:
+                    with st.spinner("🔍 Searching streets..."):
+                        results = search_places_in_chennai(search_query)
+                    
+                    if results:
+                        # ✅ Step 1: User picks broad area from search results
+                        selected = st.selectbox(
+                            "Select location:",
+                            options=results,
+                            format_func=lambda x: x['display_name'],
+                            key="area_selector"
+                        )
+                        center_lat, center_lon = selected['lat'], selected['lon']
+                        st.caption(f"📍 Found: {selected['display_name']}")
+                        
+                        # ✅ Step 2: Fetch nearby OSM streets within 1km
+                        with st.spinner("Finding nearby streets..."):
+                            nearby = search_streets_by_area(
+                                chennai_gdf, 
+                                (center_lat, center_lon), 
+                                radius_km=1.0
+                            )
+                        if nearby:
+                            # ✅ Step 3: Show real streets in dropdown
+                            street_opts = [
+                                f"{s['name']} ({s['highway_type'].title()})" 
+                                for s in nearby
+                            ]
+                            
+                            chosen_idx = st.selectbox(
+                                "Pick exact street:",
+                                options=range(len(street_opts)),
+                                format_func=lambda i: street_opts[i],
+                                key="street_selector"
+                            )
+                            
+                            selected_street_data = nearby[chosen_idx]
+                            st.success(f"✅ **{selected_street_data['name']}**")
+                            st.caption(
+                                f"Type: {selected_street_data['highway_type'].title()} | "
+                                f"Width: {selected_street_data['road_width']:.1f}m | "
+                                f"AADT: {selected_street_data['aadt']:,}"
+                            )
+                        else:
+                            # fallback to broad search result
+                            st.info("📍 No detailed OSM streets - using search result")
+                            selected_street_data = {
+                                'name': selected.get('road_name', selected['display_name']),
+                                'area': selected.get('area', 'Chennai'),
+                                'lat': selected['lat'],
+                                'lon': selected['lon'],
+                                'highway_type': 'secondary',
+                                **get_logical_mptcrsi_data('secondary', selected.get('road_name', ''))
+                            }
+                        
+                        # update selected_area for later use
+                        selected_area = selected_street_data.get('area', 'Chennai')
+                        st.success(f"✅ Found: **{selected['display_name']}**")
+                    else:
+                        st.info("No exact match. Try: 'Parrys Corner', 'Mount Road', 'Velachery Main Road'")
+            
+            else:  # 🗺️ Browse Popular Areas
+                st.markdown("**Select from predefined areas:**")
                 chennai_areas = get_chennai_areas()
                 selected_area = st.selectbox(
-                    "Area in Chennai:",
-                    options=list(chennai_areas.keys())
+                    "Popular Areas in Chennai:",
+                    options=list(chennai_areas.keys()),
+                    key="popular_area_selector"  # ← ADD UNIQUE KEY
+
                 )
                 
                 if selected_area:
                     area_coords = chennai_areas[selected_area]
-                    nearby_streets = search_streets_by_area(chennai_gdf, area_coords)                    
-                    if not nearby_streets:
-                        # We removed get_default_street_data, so just warn
-                        st.warning(f"No streets found in export.geojson for {selected_area}")
+                    nearby_streets = search_streets_by_area(chennai_gdf, area_coords)
                     
                     if nearby_streets:
                         street_options = [f"{s['name']}" for s in nearby_streets]
                         selected_street_idx = st.selectbox(
                             "Select Street:",
                             options=range(len(street_options)),
-                            format_func=lambda x: street_options[x]
+                            format_func=lambda x: street_options[x],
+                            key="popular_street_selector"  # ← ADD UNIQUE KEY
                         )
                         selected_street_data = nearby_streets[selected_street_idx]
-                        
                         st.markdown(
                             f"**Width:** {selected_street_data['road_width']:.1f}m | "
                             f"**AADT:** {selected_street_data['aadt']:,}"
                         )
+                    else:
+                        st.warning(f"No streets found in {selected_area}")
+                        selected_street_data = None
             
+            # ───── GUARD: Always define selected_area for downstream code ─────
+            if selected_street_data:
+                selected_area = selected_street_data.get('area', selected_area)
+            else:
+                selected_area = 'Chennai'
+            
+            # ========== CACHED ANALYSIS DISPLAY ==========
+            if selected_street_data is not None:
+                cached_result = fetch_cached_analysis(selected_street_data, max_age_minutes=30)
+                if cached_result['found']:
+                    display_cached_analysis_ui(cached_result)
+            
+            # ========== AI ROAD DATA EXTRACTION ==========
+            with st.expander("🤖 AI Road Analysis", expanded=False):
+                if smart_extractor:
+                    use_ai_extraction = st.checkbox(
+                        "Use AI to extract real road data",
+                        value=True,
+                        help="Analyzes multiple frames intelligently (works for Image, Video, AND Live Feed)"
+                    )
+                    
+                    if use_ai_extraction:
+                        num_frames = st.slider(
+                            "Frames to analyze",
+                            min_value=1,
+                            max_value=5,
+                            value=3,
+                            help="More frames = better accuracy but slower (3 recommended)"
+                        )
+                        
+                        st.caption("✨ AI will analyze:")
+                        st.markdown("""
+                        - 📏 Road width (meters)
+                        - 🛣️ Number of lanes
+                        - 🚗 Speed limit
+                        - 🏘️ Land use type
+                        - 🅿️ Parking situation
+                        - 💡 Infrastructure count
+                        """)
+                        
+                        st.info("📍 Smart frame selector picks the clearest frame from beginning, middle, and end")
+                else:
+                    use_ai_extraction = False
+                    num_frames = 3
+                    st.warning("⚠️ AI unavailable")
+                    st.caption("Add GEMINI_API_KEY to enable")
+            
+            # ========== START/STOP ANALYSIS BUTTONS ==========
             st.markdown("---")
-            
-            can_analyze = (uploaded_file or input_type == "Live Feed") and selected_street_data
+            can_analyze = (uploaded_file or input_type == "Live Feed") and selected_street_data is not None
             
             if can_analyze:
                 if not st.session_state.get('processing', False):
@@ -956,74 +884,126 @@ def main():
             
             if st.session_state.get('processing', False):
                 try:
-                    # Initialize variables
+                    original_street_data = selected_street_data.copy()
                     vehicle_counts_dict = {}
                     weather_data = None
                     rain_mm_hr = 0
-                    
+                    vehicle_counts_list = []
+                    water_coverages_list = []
+                       
+                    st.markdown("### 🚦 Live Detection")
+                           
+                    # ========== AI ENHANCEMENT (WORKS FOR ALL INPUT TYPES) ==========
                     if input_type == "Image":
-                        original_image = Image.open(uploaded_file).convert("RGB")
-                        
+                        original_image = original_image = safe_load_image(uploaded_file).convert("RGB")
+                        water_coverage, water_mask = detect_water(water_model, original_image)
                         # Process image
                         vehicle_counts_dict, annotated_image, vehicle_count,frame_id_set = detect_vehicles(
-                            yolo_model, original_image
+                        yolo_model, original_image,water_mask
                         )
-                        water_coverage, water_mask = detect_water(water_model, original_image)
-                        
-                        # Apply water overlay
+                                
+                                
+                                # Apply water overlay
                         result_image = apply_water_overlay(annotated_image, water_mask, alpha=0.5)
-                        
                         # Add info panel
                         img_array = np.array(result_image)
                         panel_height = 100
                         panel = np.zeros((panel_height, img_array.shape[1], 3), dtype=np.uint8)
                         panel[:] = (40, 40, 40)
                         cv2.putText(panel, f'Vehicles: {int(vehicle_count)}', (20, 35), 
-                                   cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
                         cv2.putText(panel, f'Water Coverage: {water_coverage:.1f}%', (20, 75), 
-                                   cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 150, 0), 2)
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 150, 0), 2)
                         
                         result_with_panel = np.vstack([panel, img_array])
                         video_placeholder.image(
-                            result_with_panel, 
-                            caption="Detection Results", 
-                            channels="RGB", 
-                            width="stretch"
+                        result_with_panel, 
+                        caption="Detection Results", 
+                        channels="RGB", 
+                        width="stretch"
                         )
-                        
+                               
                         progress_bar.progress(1.0)
                         frames_processed = 1
                         # --- THIS IS THE FIX ---
                         # We must create these lists for the image mode
                         vehicle_counts_list = [vehicle_count]
                         water_coverages_list = [water_coverage] # This line was missing
-                        
-                        # Get unique vehicle count for the image
+                                
+                                # Get unique vehicle count for the image
                         total_unique_vehicles = len(frame_id_set)
-                        
-                        # Set the average count 
+                                
+                                # Set the average count 
                         avg_vehicle_count = vehicle_count
                     elif input_type == "Video":
-                        # Save uploaded video
+                                # Save uploaded video
                         video_path = "temp_video.mp4"
                         with open(video_path, "wb") as f:
                             f.write(uploaded_file.read())
-                        
+                                
                         # Process video
                         vehicle_count, water_coverage, frames_processed, vehicle_counts_dict, total_unique_vehicles, vehicle_counts_list, water_coverages_list = process_video_stream(
-                            yolo_model, water_model, video_path, 
-                            frame_limit, video_placeholder, progress_bar
-                        )
-                        
+                                    yolo_model, water_model, video_path, 
+                                    frame_limit, video_placeholder, progress_bar
+                                )
+                                
                     else:  # Live Feed
-                        vehicle_count, water_coverage, frames_processed, vehicle_counts_dict, total_unique_vehicles, vehicle_counts_list, water_coverages_list = process_video_stream(
-                            yolo_model, water_model, video_path, 
-                            frame_limit, video_placeholder, progress_bar
-                        )
+                                vehicle_count, water_coverage, frames_processed, vehicle_counts_dict, total_unique_vehicles, vehicle_counts_list, water_coverages_list = process_video_stream(
+                                    yolo_model, water_model,0, 
+                                    frame_limit, video_placeholder, progress_bar
+                                )
 
-                    # Fetch weather and calculate risk
+                                    # ========== AI ENHANCEMENT (AFTER DETECTION) ==========
+                    if use_ai_extraction and smart_extractor:
+                            st.markdown("---")
+                            st.markdown("### 🔍 AI Road Data Extraction")
+                            
+                            # Determine source for analysis
+                            if input_type == "Image":
+                                analysis_source = original_image = safe_load_image(uploaded_file).convert("RGB")
+                            elif input_type == "Video":
+                                video_path = "temp_video_analysis.mp4"
+                                with open(video_path, "wb") as f:
+                                    uploaded_file.seek(0)  # Reset file pointer
+                                    f.write(uploaded_file.read())
+                                analysis_source = video_path
+                            else:  # Live Feed
+                                analysis_source = 0
+                            
+                            # Run smart multi-frame analysis
+                    with st.spinner(f"🤖 Analyzing {num_frames} frames for road data..."):
+                        try:
+                            enhanced_data = smart_extractor.enhance_street_data_with_smart_vision(
+                                selected_street_data,
+                                analysis_source,
+                                num_frames
+                            )
+                                
+                            # Update selected_street_data with enhanced data
+                            if enhanced_data.get('ai_extraction_success', False):  # ← Check success flag
+                                enhanced_data.setdefault('aadt', original_street_data['aadt'])
+                                enhanced_data.setdefault('speed_limit', original_street_data['speed_limit'])
+                                enhanced_data.setdefault('road_width', original_street_data['road_width'])
+                                create_enhanced_comparison_ui(original_street_data, enhanced_data)
+    
+                                if enhanced_data.get('ai_confidence', 0) >= 5:
+                                    selected_street_data = enhanced_data
+                                    st.success("✅ Using AI-extracted road data for risk calculation")
+                                else:
+                                    st.warning("⚠️ Low AI confidence - using knowledge base data instead")
+                            else:
+                                # AI extraction failed completely
+                                st.error("⚠️ AI extraction failed - using knowledge base data")
+                                st.caption("Tip: Check your GEMINI_API_KEY or try a clearer image")
+                        except Exception as ai_error:
+                                st.warning(f"⚠️ AI analysis failed: {ai_error}")
+                                st.info("📚 Continuing with knowledge base data")
+                        # ========== END OF AI ENHANCEMENT ==========
+                
+                # Now fetch weather and calculate risk
                     lat = selected_street_data['lat']
                     lon = selected_street_data['lon']
+                    
                     weather_data, weather_error = get_weather_data(lat, lon)
                     rain_mm_hr = weather_data.get('rain_1h', 0) if weather_data else 0
                     
@@ -1047,192 +1027,224 @@ def main():
                     st.session_state['results']['total_unique_vehicles'] = total_unique_vehicles
                     st.session_state['results']['total_detections'] = total_detections  
                     st.success(f"Analysis Complete! Processed {frames_processed} frames")
-                    
-                    # Display results
-                    st.markdown("---")
-                    st.markdown("### Analysis Dashboard")
-                    
-                    fig = create_results_visualization(
-                        vehicle_count, water_coverage, risk_score, vehicle_counts_dict
-                    )
-                    st.pyplot(fig)  
-                    
-                    st.markdown("---")
-                    st.markdown("### MPTCRSI-ES Historical Analysis")
-                    
-                    hist_col1, hist_col2 = st.columns(2)
-                    
-                    with hist_col1:
-                        st.markdown("#### 🚨 EPDO Score (Past Accident Severity)")
-                        epdo_score, epdo_cat = calculate_epdo(
-                            selected_street_data.get('fatal_crashes_hist', 0),
-                            selected_street_data.get('injury_crashes_hist', 0),
-                            selected_street_data.get('property_crashes_hist', 0)
-                        )
-                        st.metric(f"EPDO Score: {epdo_score}", epdo_cat)
-                        st.caption(f"Based on {selected_street_data.get('fatal_crashes_hist', 0)} Fatals, {selected_street_data.get('injury_crashes_hist', 0)} Injuries, {selected_street_data.get('property_crashes_hist', 0)} Property")
-
-                    with hist_col2:
-                        st.markdown("#### 🔮 Accident Prediction Model")
-                        predicted_accidents = predict_accidents(
-                            selected_street_data.get('aadt', 20000),
-                            selected_street_data.get('road_width', 9.0),
-                            selected_street_data.get('speed_limit', 30),
-                            selected_street_data.get('num_exits', 5),
-                            selected_street_data.get('num_side_roads', 4),
-                            selected_street_data.get('parking_type', 'prohibited'),
-                            selected_street_data.get('land_use', 'residential')
-                        )
-                        st.metric("Predicted Accidents / Year", f"{predicted_accidents:.2f}")
-                        st.caption("Based on the multi-variable MPTCRSI-ES model")
-                    
-                    # --- END OF NEW UI SECTION ---
-                   # --- 💡 AI-Powered Recommendations (Gemini) ---
-                    st.markdown("---")
-                    st.markdown("### 💡 AI-Powered Recommendations")
-                    
-                    # 1. Gather all the data
-                    live_data = {
-                        'risk_score': risk_score,
-                        'water_coverage': water_coverage,
-                        'avg_density': vehicle_count # 'vehicle_count' is the average
+                    video_metadata = {
+                        'frames_processed': frames_processed,
+                        'duration': 0,
+                        'source': input_type.lower()
                     }
-                    historical_data = {
-                        'epdo_category': epdo_cat,
-                        'epdo_score': epdo_score,
-                        'predicted_accidents': predicted_accidents
-                    }
-                    
-                    # 2. Call Gemini automatically
-                    with st.spinner("🚀 Asking Gemini for a deep-level expert analysis..."):
-                        gemini_recommendation = get_gemini_recommendations(
-                            live_data, 
-                            historical_data, 
-                            selected_street_data
-                        )
-                        st.markdown(gemini_recommendation)
-                    # --- END OF NEW UI SECTION ---
-                    
-                    
-                    # Detailed metrics
-                    st.markdown("---")
-                    st.markdown("### Live Analysis Details") # <-- Renamed
-                    col2a, col2b, col2c = st.columns(3)
-                    with col2a:
-                        st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-                        st.markdown("#### Location Details")
-                        st.markdown(f"**{selected_street_data['name']}**")
-                        st.markdown(f"**Area:** {selected_area}")
-                        st.markdown(f"**Type:** {selected_street_data['highway_type'].title()}")
-                        st.markdown(f"**Width:** {selected_street_data['road_width']:.1f}m")
-                        st.markdown(f"**AADT:** {selected_street_data['aadt']:,}/day")
-                        st.markdown(f"**Speed Limit:** {selected_street_data['speed_limit']} km/h")
-                        st.markdown('</div>', unsafe_allow_html=True)
-                    
-                    with col2b:
-                        st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-                        st.markdown("#### Vehicle Detection")
-                        st.metric("Total Unique Vehicles", f"{int(total_unique_vehicles)}")
-                        st.metric("Total Detections (for pie chart)", f"{int(total_detections)}")                        
-                        if vehicle_counts_dict and sum(vehicle_counts_dict.values()) > 0:
-                            st.markdown("**Breakdown (by detection):**")
-                            for vtype, count in vehicle_counts_dict.items():
-                                if count > 0:
-                                    st.markdown(f"- {vtype.title()}: {count}")
-                        
-                        st.markdown("#### Water Analysis")
-                        st.metric("Coverage", f"{water_coverage:.1f}%")
-                        category, severity = get_water_level_category(water_coverage)
-                        
-                        if severity == "critical":
-                            st.error(f"{category} Flooding")
-                        elif severity == "high":
-                            st.warning(f"{category} Water")
-                        elif severity == "medium":
-                            st.info(f"{category} Water")
-                        else:
-                            st.success(f"{category} Water")
-                        st.markdown('</div>', unsafe_allow_html=True)
-                    
-                    with col2c:
-                        st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-                        if weather_data:
-                            st.markdown("#### Weather")
-                            st.markdown(f"**{weather_data['description']}**")
-                            st.metric("Rain", f"{rain_mm_hr} mm/hr")
-                            st.metric("Temp", f"{weather_data['temperature']}°C")
-                        
-                        st.markdown("#### Risk Assessment")
-                        if risk_score >= 85:
-                            st.markdown(
-                                f'<div class="risk-very-high">VERY HIGH RISK<br/>'
-                                f'{risk_score:.1f}/100<br/>Avoid Route</div>', 
-                                unsafe_allow_html=True
-                            )
-                        elif risk_score >= 65:
-                            st.markdown(
-                                f'<div class="risk-high">HIGH RISK<br/>'
-                                f'{risk_score:.1f}/100<br/>Use Caution</div>', 
-                                unsafe_allow_html=True
-                            )
-                        elif risk_score >= 45:
-                            st.markdown(
-                                f'<div class="risk-medium">MEDIUM RISK<br/>'
-                                f'{risk_score:.1f}/100<br/>Drive Carefully</div>', 
-                                unsafe_allow_html=True
-                            )
-                        else:
-                            st.markdown(
-                                f'<div class="risk-low">LOW RISK<br/>'
-                                f'{risk_score:.1f}/100<br/>Safe Conditions</div>', 
-                                unsafe_allow_html=True
-                            )
-                        st.markdown('</div>', unsafe_allow_html=True)
-                    
-                    # Download report
-                    st.markdown("---")
-                    report_text = f"""
-C-RAPS ANALYSIS REPORT
-=====================
 
-Location: {selected_street_data['name']}, {selected_area}
-Date: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}
-
-VEHICLE DETECTION RESULTS:
-- Unique Vehicles: {int(total_unique_vehicles)}
-- Total Detections: {int(total_detections)}
-- Avg Vehicles/Frame (Density): {int(vehicle_count)}
-
-WATER DETECTION RESULTS:
-- Water Coverage: {water_coverage:.1f}%
-- Frames Processed: {frames_processed}
-
-RISK ASSESSMENT:
-- Risk Score: {risk_score:.1f}/100
-- Risk Level: {"VERY HIGH" if risk_score >= 85 else "HIGH" if risk_score >= 65 else "MEDIUM" if risk_score >= 45 else "LOW"}
-
-WEATHER:
-- Condition: {weather_data.get('description', 'N/A')}
-- Rain: {rain_mm_hr} mm/hr
-- Temperature: {weather_data.get('temperature', 'N/A')}°C
-                    """
-                    
-                    st.download_button(
-                        label="Download Report",
-                        data=report_text,
-                        file_name=f"craps_report_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.txt",
-                        mime="text/plain",
-                        width="stretch"
+                    success, location_key = save_video_analysis(
+                        selected_street_data,
+                        st.session_state['results'],
+                        video_metadata
                     )
-                    
-                    # Reset processing state
-                    st.session_state['processing'] = False
-                    
+
+                    if success:
+                        st.success(f"✅ Analysis saved! Other users can now see recent data for this location.")
+
+                        # Display results
+                        st.markdown("---")
+                        st.markdown("### Analysis Dashboard")
+                        
+                        fig = create_results_visualization(
+                            vehicle_count, water_coverage, risk_score, vehicle_counts_dict
+                        )
+                        st.pyplot(fig)  
+                        
+                        st.markdown("---")
+                        st.markdown("### MPTCRSI-ES Historical Analysis")
+                        
+                        hist_col1, hist_col2 = st.columns(2)
+                        
+                        with hist_col1:
+                            st.markdown("#### 🚨 EPDO Score (Past Accident Severity)")
+                            epdo_score, epdo_cat = calculate_epdo(
+                                selected_street_data.get('fatal_crashes_hist', 0),
+                                selected_street_data.get('injury_crashes_hist', 0),
+                                selected_street_data.get('property_crashes_hist', 0)
+                            )
+                            st.metric(f"EPDO Score: {epdo_score}", epdo_cat)
+                            st.caption(f"Based on {selected_street_data.get('fatal_crashes_hist', 0)} Fatals, {selected_street_data.get('injury_crashes_hist', 0)} Injuries, {selected_street_data.get('property_crashes_hist', 0)} Property")
+
+                        with hist_col2:
+                            st.markdown("#### 🔮 Accident Prediction Model")
+                            predicted_accidents = predict_accidents(
+                                selected_street_data.get('aadt', 20000),
+                                selected_street_data.get('road_width', 9.0),
+                                selected_street_data.get('speed_limit', 30),
+                                selected_street_data.get('num_exits', 5),
+                                selected_street_data.get('num_side_roads', 4),
+                                selected_street_data.get('parking_type', 'prohibited'),
+                                selected_street_data.get('land_use', 'residential')
+                            )
+                            st.metric("Predicted Accidents / Year", f"{predicted_accidents:.2f}")
+                            st.caption("Based on the multi-variable MPTCRSI-ES model")
+                        
+                        # --- END OF NEW UI SECTION ---
+                    # --- 💡 AI-Powered Recommendations (Gemini) ---
+                        st.markdown("---")
+                        st.markdown("### 💡 AI-Powered Recommendations")
+                        
+                        # 1. Gather all the data
+                        live_data = {
+                            'risk_score': risk_score,
+                            'water_coverage': water_coverage,
+                            'avg_density': vehicle_count # 'vehicle_count' is the average
+                        }
+                        historical_data = {
+                            'epdo_category': epdo_cat,
+                            'epdo_score': epdo_score,
+                            'predicted_accidents': predicted_accidents
+                        }
+                        
+                        # 2. Call Gemini automatically
+                        st.markdown("---")
+                        st.markdown("### 💬 Personalized Safety Advice")
+
+                        tab_citizen, tab_official = st.tabs(["👤 For Citizens", "🏛️ For Officials"])
+
+                        with tab_citizen:
+                            with st.spinner("🤖 Getting personalized advice..."):
+                                citizen_advice = get_citizen_recommendations(
+                                    live_data, 
+                                    historical_data, 
+                                    selected_street_data,
+                                    "commuter"
+                                )
+                                st.markdown(citizen_advice)
+
+                        with tab_official:
+                            st.caption("Technical recommendations for authorities")
+                            with st.spinner("📋 Generating official report..."):
+                                official_report = get_official_recommendations(
+                                    live_data, 
+                                    historical_data, 
+                                    selected_street_data
+                                )
+                                st.markdown(official_report)                    
+                        # Detailed metrics
+                        st.markdown("---")
+                        st.markdown("### Live Analysis Details") # <-- Renamed
+                        col2a, col2b, col2c = st.columns(3)
+                        with col2a:
+                            st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+                            st.markdown("#### Location Details")
+                            st.markdown(f"**{selected_street_data['name']}**")
+                            if selected_street_data.get('data_source') == 'ai_enhanced_multi_frame':
+                                st.success(f"🤖 AI-Enhanced (Frame #{selected_street_data.get('frame_used', 1)})")
+                                st.caption(f"Quality: {selected_street_data.get('frame_quality', 0):.1f}/100 | Confidence: {selected_street_data.get('ai_confidence', 0)}/10")
+                            else:
+                                st.info("📚 Knowledge Base Data")
+                            st.markdown(f"**Area:** {selected_area}")
+                            st.markdown(f"**Type:** {selected_street_data['highway_type'].title()}")
+                            st.markdown(f"**Width:** {selected_street_data['road_width']:.1f}m")
+                            st.markdown(f"**AADT:** {selected_street_data['aadt']:,}/day")
+                            st.markdown(f"**Speed Limit:** {selected_street_data['speed_limit']} km/h")
+                            st.markdown('</div>', unsafe_allow_html=True)
+                        
+                        with col2b:
+                            st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+                            st.markdown("#### Vehicle Detection")
+                            st.metric("Total Unique Vehicles", f"{int(total_unique_vehicles)}")
+                            st.metric("Total Detections (for pie chart)", f"{int(total_detections)}")                        
+                            if vehicle_counts_dict and sum(vehicle_counts_dict.values()) > 0:
+                                st.markdown("**Breakdown (by detection):**")
+                                for vtype, count in vehicle_counts_dict.items():
+                                    if count > 0:
+                                        st.markdown(f"- {vtype.title()}: {count}")
+                            
+                            st.markdown("#### Water Analysis")
+                            st.metric("Coverage", f"{water_coverage:.1f}%")
+                            category, severity = get_water_level_category(water_coverage)
+                            
+                            if severity == "critical":
+                                st.error(f"{category} Flooding")
+                            elif severity == "high":
+                                st.warning(f"{category} Water")
+                            elif severity == "medium":
+                                st.info(f"{category} Water")
+                            else:
+                                st.success(f"{category} Water")
+                            st.markdown('</div>', unsafe_allow_html=True)
+                        
+                        with col2c:
+                            st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+                            if weather_data:
+                                st.markdown("#### Weather")
+                                st.markdown(f"**{weather_data['description']}**")
+                                st.metric("Rain", f"{rain_mm_hr} mm/hr")
+                                st.metric("Temp", f"{weather_data['temperature']}°C")
+                            
+                            st.markdown("#### Risk Assessment")
+                            if risk_score >= 85:
+                                st.markdown(
+                                    f'<div class="risk-very-high">VERY HIGH RISK<br/>'
+                                    f'{risk_score:.1f}/100<br/>Avoid Route</div>', 
+                                    unsafe_allow_html=True
+                                )
+                            elif risk_score >= 65:
+                                st.markdown(
+                                    f'<div class="risk-high">HIGH RISK<br/>'
+                                    f'{risk_score:.1f}/100<br/>Use Caution</div>', 
+                                    unsafe_allow_html=True
+                                )
+                            elif risk_score >= 45:
+                                st.markdown(
+                                    f'<div class="risk-medium">MEDIUM RISK<br/>'
+                                    f'{risk_score:.1f}/100<br/>Drive Carefully</div>', 
+                                    unsafe_allow_html=True
+                                )
+                            else:
+                                st.markdown(
+                                    f'<div class="risk-low">LOW RISK<br/>'
+                                    f'{risk_score:.1f}/100<br/>Safe Conditions</div>', 
+                                    unsafe_allow_html=True
+                                )
+                            st.markdown('</div>', unsafe_allow_html=True)
+                        
+                        # Download report
+                        st.markdown("---")
+                        report_text = f"""
+    C-RAPS ANALYSIS REPORT
+    =====================
+
+    Location: {selected_street_data['name']}, {selected_area}
+    Date: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+    VEHICLE DETECTION RESULTS:
+    - Unique Vehicles: {int(total_unique_vehicles)}
+    - Total Detections: {int(total_detections)}
+    - Avg Vehicles/Frame (Density): {int(vehicle_count)}
+
+    WATER DETECTION RESULTS:
+    - Water Coverage: {water_coverage:.1f}%
+    - Frames Processed: {frames_processed}
+
+    RISK ASSESSMENT:
+    - Risk Score: {risk_score:.1f}/100
+    - Risk Level: {"VERY HIGH" if risk_score >= 85 else "HIGH" if risk_score >= 65 else "MEDIUM" if risk_score >= 45 else "LOW"}
+
+    WEATHER:
+    - Condition: {weather_data.get('description', 'N/A')}
+    - Rain: {rain_mm_hr} mm/hr
+    - Temperature: {weather_data.get('temperature', 'N/A')}°C
+                        """
+                        st.download_button(
+                            label="Download Report",
+                            data=report_text,
+                            file_name=f"craps_report_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.txt",
+                            mime="text/plain",
+                            width="stretch"
+                        )
+                        
+                        # Reset processing state
+                        st.session_state['processing'] = False
+                        
                 except Exception as e:
                     st.error(f"Analysis failed: {e}")
                     st.session_state['processing'] = False
             else:
-                st.info("Configure settings and click 'Start Analysis'")
+                    st.info("Configure settings and click 'Start Analysis'")
     
     with tab2:
         # --- ADD THE MAP HERE ---
@@ -1241,6 +1253,7 @@ WEATHER:
         
         # Get the selected area's data from the sidebar
         selected_area_name = st.session_state.get('selected_area', 'T. Nagar')
+        chennai_areas = get_chennai_areas()
         area_coords = chennai_areas[selected_area_name]
         
         # Create and display the map
@@ -1288,3 +1301,7 @@ WEATHER:
 
 if __name__ == "__main__":
     main()
+"""
+C-RAPS: Chennai Risk Analysis & Prediction System
+Main Streamlit UI Application
+"""

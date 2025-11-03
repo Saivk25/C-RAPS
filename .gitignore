@@ -7,4 +7,4 @@ temp_chart.png
 .env
 secrets.toml
 *.DS_Store
-*.log
+*.log0
